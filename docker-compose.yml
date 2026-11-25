@@ -1,0 +1,66 @@
+name: api-gateway
+
+services:
+  mongo:
+    image: mongo:7.0
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ${MONGO_INITDB_ROOT_USERNAME:-gateway}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_INITDB_ROOT_PASSWORD:-change-me-in-production}
+      MONGO_INITDB_DATABASE: ${MONGO_DB:-api_gateway}
+    ports:
+      - "${MONGO_EXTERNAL_PORT:-27017}:27017"
+    volumes:
+      - mongo_data:/data/db
+    networks:
+      - gateway_net
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - "mongosh --quiet --username \"$${MONGO_INITDB_ROOT_USERNAME}\" --password \"$${MONGO_INITDB_ROOT_PASSWORD}\" --authenticationDatabase admin --eval \"db.adminCommand({ ping: 1 }).ok\" | grep -q 1"
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    init: true
+    env_file:
+      - .env
+    environment:
+      # Overrides the localhost URI from .env with the internal Compose hostname.
+      MONGODB_URI: mongodb://${MONGO_INITDB_ROOT_USERNAME:-gateway}:${MONGO_INITDB_ROOT_PASSWORD:-change-me-in-production}@mongo:27017/${MONGO_DB:-api_gateway}?authSource=admin
+      MONGODB_DATABASE: ${MONGO_DB:-api_gateway}
+      APP_HOST: 0.0.0.0
+      APP_PORT: 8000
+    ports:
+      - "${APP_EXTERNAL_PORT:-8000}:8000"
+    depends_on:
+      mongo:
+        condition: service_healthy
+    networks:
+      - gateway_net
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/v1/health', timeout=3).read()"
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+volumes:
+  mongo_data:
+    driver: local
+
+networks:
+  gateway_net:
+    driver: bridge
